@@ -1,0 +1,9 @@
+// sudo -u postgres psql
+
+{
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  }
+}
