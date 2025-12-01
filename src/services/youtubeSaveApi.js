@@ -1,7 +1,7 @@
-const BASE = "http://localhost:8000";
+import { API_BASE_URL } from "../config/api";
 
 export async function saveVideoToHistory(video) {
-  const res = await fetch(`${BASE}/youtube/save`, {
+  const res = await fetch(`${API_BASE_URL}/youtube/save`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

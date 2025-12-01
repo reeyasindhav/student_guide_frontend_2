@@ -1,11 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { fetchVideos } from "@/services/youtubeApi";
-import VideoCardHorizontal from "@/components/VideoCardHorizontal";
-import { useRouter } from "next/navigation";
-
+import VideoCard from "@/components/VideoCard";
+import { useRouter, useSearchParams } from "next/navigation";
 import { fetchSavedVideos } from "@/services/historyApi";
-import HistoryListItem from "@/components/HistoryListItem";
+import { API_BASE_URL } from "@/config/api";
+import { VideoGridSkeleton } from "@/components/LoadingSkeleton";
+import { Filter, Grid, List, X, Loader2 } from "lucide-react";
 
 function formatISODateToYMD(iso) {
   if (!iso) return "";
@@ -16,89 +17,190 @@ function formatISODateToYMD(iso) {
   }
 }
 
-export default function YoutubePage() {
-  const [query, setQuery] = useState("");
+function YoutubeContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialQuery = searchParams.get("q") || "";
+
+  const [query, setQuery] = useState(initialQuery);
   const [videos, setVideos] = useState([]);
   const [savedVideos, setSavedVideos] = useState([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [viewMode, setViewMode] = useState("grid");
+  const [showFilters, setShowFilters] = useState(false);
 
   const [sortBy, setSortBy] = useState("relevance");
   const [includeShorts, setIncludeShorts] = useState(false);
-  const [useGeminiFilter, setUseGeminiFilter] = useState(true);
-
+  const [useGeminiFilter, setUseGeminiFilter] = useState(false);
   const [playing, setPlaying] = useState(null);
 
-  const router = useRouter();
+  const searchAbortRef = useRef(null);
 
-  // Load saved videos once
-  useState(() => {
+  useEffect(() => {
     loadSavedVideos();
-  });
+  }, []);
 
-  async function loadSavedVideos() {
+  useEffect(() => {
+    return () => {
+      if (searchAbortRef.current) {
+        searchAbortRef.current.abort();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (initialQuery) {
+      setQuery(initialQuery);
+      if (searchAbortRef.current) {
+        searchAbortRef.current.abort();
+      }
+      searchAbortRef.current = new AbortController();
+      handleSearch(initialQuery, searchAbortRef.current.signal);
+    }
+    return () => {
+      if (searchAbortRef.current) {
+        searchAbortRef.current.abort();
+      }
+    };
+  }, []);
+
+  const loadSavedVideos = useCallback(async () => {
     setLoadingSaved(true);
     try {
       const data = await fetchSavedVideos();
-      setSavedVideos(data);
+      setSavedVideos(data || []);
     } catch (err) {
       console.error("Failed to load saved videos", err);
     } finally {
       setLoadingSaved(false);
     }
-  }
+  }, []);
 
-  async function saveVideoToDB(video) {
-    try {
-      const res = await fetch("http://localhost:8000/youtube/save", {
+  const saveVideoToDB = useCallback(
+    async (video) => {
+      const videoId =
+        video.videoId || video.video_id || video.id?.videoId || video.id;
+      const title = video.title || "Untitled Video";
+      const channel = video.channelTitle || video.channel || "Unknown Channel";
+      const thumbnail =
+        video.thumbnails?.medium?.url ||
+        video.thumbnails?.default?.url ||
+        video.thumbnail ||
+        "";
+      const publishedAt =
+        video.publishedAt || video.published_at || new Date().toISOString();
+
+      if (!videoId) {
+        alert("Error: Video ID is missing. Cannot save video.");
+        throw new Error("Video ID is missing");
+      }
+
+      const res = await fetch(`${API_BASE_URL}/youtube/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          video_id: video.videoId || video.video_id,
-          title: video.title,
-          channel: video.channelTitle || video.channel,
-          thumbnail: video.thumbnails?.medium?.url,
-          published_at: video.publishedAt
+          video_id: videoId,
+          title: title,
+          channel: channel,
+          thumbnail: thumbnail,
+          published_at: publishedAt,
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to save video");
+      if (!res.ok) {
+        const errorData = await res
+          .json()
+          .catch(() => ({ detail: "Failed to save video" }));
+        const errorMessage = errorData.detail || "Failed to save video";
+        alert(`Could not save video: ${errorMessage}`);
+        throw new Error(errorMessage);
+      }
 
-      await loadSavedVideos(); // refresh sidebar
-      alert("Saved!");
-    } catch (err) {
-      console.error(err);
-      alert("Could not save video");
-    }
-  }
+      const savedData = await res.json();
 
-  async function handleSearch() {
-    if (!query.trim()) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const vids = await fetchVideos(query, {
-        sortBy,
-        includeShorts,
-        useGeminiFilter,
-        maxResults: 3,
+      console.log("Video saved successfully:", savedData);
+
+      loadSavedVideos().catch((err) => {
+        console.error("Failed to refresh saved videos:", err);
       });
-      const mapped = vids.map(v => ({
-        ...v,
-        publishedDate: formatISODateToYMD(v.publishedAt),
-      }));
-      setVideos(mapped);
-    } catch (err) {
-      setError(err.message);
-      setVideos([]);
-    } finally {
-      setLoading(false);
-    }
-  }
 
-  function openPlayer(video) {
-    const videoId = video.video_id || video.videoId || video.id || video.videoId?.videoId;
+      return savedData;
+    },
+    [loadSavedVideos]
+  );
+
+  const handleSearch = useCallback(
+    async (searchQuery = query, signal = null) => {
+      if (!searchQuery.trim()) return;
+
+      setLoading(true);
+      setError(null);
+      setVideos([]);
+
+      try {
+        const vids = await fetchVideos(
+          searchQuery,
+          {
+            sortBy,
+            includeShorts,
+            useGeminiFilter,
+            maxResults: 20,
+          },
+          signal
+        );
+
+        if (signal?.aborted) return;
+
+        const mapped = vids.map((v) => ({
+          ...v,
+          publishedDate: formatISODateToYMD(v.publishedAt),
+        }));
+
+        setVideos(mapped);
+
+        if (searchQuery !== initialQuery) {
+          router.push(`/youtube?q=${encodeURIComponent(searchQuery)}`, {
+            scroll: false,
+          });
+        }
+      } catch (err) {
+        if (signal?.aborted || err.name === "AbortError") return;
+        setError(err.message || "Failed to fetch videos");
+        setVideos([]);
+      } finally {
+        if (!signal?.aborted) {
+          setLoading(false);
+        }
+      }
+    },
+    [sortBy, includeShorts, useGeminiFilter, router, initialQuery, query]
+  );
+
+  useEffect(() => {
+    if (query.trim() && videos.length > 0) {
+      if (searchAbortRef.current) {
+        searchAbortRef.current.abort();
+      }
+      searchAbortRef.current = new AbortController();
+
+      const timeoutId = setTimeout(() => {
+        handleSearch(query, searchAbortRef.current.signal);
+      }, 300);
+
+      return () => {
+        clearTimeout(timeoutId);
+        if (searchAbortRef.current) {
+          searchAbortRef.current.abort();
+        }
+      };
+    }
+  }, [sortBy, includeShorts, useGeminiFilter]);
+
+  const openPlayer = useCallback((video) => {
+    const videoId =
+      video.video_id || video.videoId || video.id || video.videoId?.videoId;
     setPlaying({
       videoId,
       title: video.title,
@@ -107,172 +209,301 @@ export default function YoutubePage() {
       publishedDate: video.publishedDate,
       description: video.description || "",
     });
-  }
+  }, []);
 
-  function closePlayer() {
-    setPlaying(null);
-  }
-
-  function goToSummarize(video) {
-    const vid =
-      video.videoId ||
-      video.video_id ||
-      (video.id && typeof video.id === "string"
-        ? video.id
-        : video.id?.videoId);
-
-    router.push(`/summarizer?videoId=${encodeURIComponent(vid)}`);
-  }
+  const goToSummarize = useCallback(
+    (video) => {
+      const vid =
+        video.videoId ||
+        video.video_id ||
+        (video.id && typeof video.id === "string"
+          ? video.id
+          : video.id?.videoId);
+      router.push(`/summarizer?videoId=${encodeURIComponent(vid)}`);
+    },
+    [router]
+  );
 
   return (
-    <div className="flex gap-8 min-h-[calc(100vh-56px)] bg-gradient-to-br from-indigo-50 via-white to-blue-50 dark:from-black dark:to-zinc-900 py-8 px-4">
-      {/* ---------- LEFT SIDEBAR ---------- */}
-      <aside className="w-72 sticky top-20 self-start bg-white dark:bg-zinc-900 rounded-xl shadow-lg p-5 h-fit min-h-[300px]">
-        <div className="font-bold text-xl text-indigo-700 dark:text-indigo-300 mb-3">Saved Videos</div>
+    <div className="min-h-screen bg-white dark:bg-[#0f0f0f]">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Saved Videos Section */}
+        {(loadingSaved || savedVideos.length > 0) && (
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                {loadingSaved
+                  ? "Loading Saved Videos..."
+                  : `Your Saved Videos (${savedVideos.length})`}
+              </h2>
+            </div>
+            {loadingSaved ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {[...Array(4)].map((_, i) => (
+                  <VideoCard key={`skeleton-${i}`} isLoading={true} />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {savedVideos.map((savedVideo) => {
+                  const normalizedVideo = {
+                    videoId: savedVideo.video_id,
+                    video_id: savedVideo.video_id,
+                    id: savedVideo.id,
+                    title: savedVideo.title,
+                    channelTitle: savedVideo.channel,
+                    channel: savedVideo.channel,
+                    thumbnails: {
+                      medium: { url: savedVideo.thumbnail },
+                      default: { url: savedVideo.thumbnail },
+                    },
+                    thumbnail: savedVideo.thumbnail,
+                    publishedAt: savedVideo.published_at,
+                    published_at: savedVideo.published_at,
+                    viewCount: savedVideo.view_count || 0,
+                  };
 
-        {loadingSaved && <div className="text-sm text-gray-500">Loading...</div>}
-        {!loadingSaved && savedVideos.length === 0 && (
-          <div className="text-sm text-gray-400">No saved videos yet.</div>
+                  return (
+                    <VideoCard
+                      key={savedVideo.id || savedVideo.video_id}
+                      video={normalizedVideo}
+                      onPlay={openPlayer}
+                      onSummarize={goToSummarize}
+                      onSave={saveVideoToDB}
+                    />
+                  );
+                })}
+              </div>
+            )}
+            {query && !loadingSaved && (
+              <div className="my-8 border-t border-gray-200 dark:border-gray-800"></div>
+            )}
+          </div>
         )}
 
-        <div className="mt-3 space-y-2">
-          {savedVideos.map((item) => (
-            <HistoryListItem
-              key={item.id}
-              item={item}
-              subtitle={item.channel}
-              onClick={() => openPlayer(item)}
-            />
-          ))}
-        </div>
-      </aside>
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+              {query
+                ? `Search Results for "${query}"`
+                : savedVideos.length > 0
+                ? "Discover More Videos"
+                : "Discover Educational Videos"}
+            </h1>
 
-      {/* ---------- MAIN PANEL ---------- */}
-      <main className="flex-1 max-w-3xl mx-auto">
-        <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-lg p-8 mb-8">
-          <h1 className="text-3xl font-bold text-indigo-700 dark:text-indigo-300 mb-2">Search JEE/NEET Videos</h1>
-          <p className="text-gray-600 dark:text-zinc-400 text-base mb-6">
-            Find educational videos — Gemini filters out non-edu content.
-          </p>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+                <button
+                  onClick={() => setViewMode("grid")}
+                  className={`p-2 rounded transition-colors ${
+                    viewMode === "grid"
+                      ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                      : "text-gray-600 dark:text-gray-400"
+                  }`}
+                >
+                  <Grid size={18} />
+                </button>
+                <button
+                  onClick={() => setViewMode("list")}
+                  className={`p-2 rounded transition-colors ${
+                    viewMode === "list"
+                      ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                      : "text-gray-600 dark:text-gray-400"
+                  }`}
+                >
+                  <List size={18} />
+                </button>
+              </div>
 
-          <div className="flex gap-3 mb-4">
-            <input
-              type="text"
-              placeholder="Search topic e.g. Matrices, Kinematics"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="p-3 border rounded-lg w-full text-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            />
-            <button
-              onClick={handleSearch}
-              className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-semibold shadow hover:bg-indigo-700 transition"
-            >
-              Search
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4 mb-4">
-            <label className="font-medium">
-              Sort:
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-                className="ml-2 p-2 border rounded-lg bg-white dark:bg-zinc-800"
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors"
               >
-                <option value="relevance">Relevance</option>
-                <option value="date">Upload date</option>
-                <option value="viewCount">View count</option>
-                <option value="rating">Rating</option>
-              </select>
-            </label>
-
-            <label className="flex items-center font-medium">
-              <input
-                type="checkbox"
-                checked={includeShorts}
-                onChange={(e) => setIncludeShorts(e.target.checked)}
-                className="mr-2 accent-indigo-600"
-              />
-              Include Shorts
-            </label>
-
-            <label className="flex items-center font-medium">
-              <input
-                type="checkbox"
-                checked={useGeminiFilter}
-                onChange={(e) => setUseGeminiFilter(e.target.checked)}
-                className="mr-2 accent-indigo-600"
-              />
-              Gemini EDU filter
-            </label>
+                <Filter size={18} />
+                <span className="hidden sm:inline">Filters</span>
+              </button>
+            </div>
           </div>
 
-          {loading && <p className="mt-4 text-indigo-600 font-semibold">Loading...</p>}
-          {error && <p className="mt-4 text-red-600 font-semibold">{error}</p>}
+          {showFilters && (
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 mb-4 border border-gray-200 dark:border-gray-800 animate-in slide-in-from-top-2">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-gray-900 dark:text-white">
+                  Filters
+                </h3>
+                <button
+                  onClick={() => setShowFilters(false)}
+                  className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded"
+                >
+                  <X size={18} />
+                </button>
+              </div>
 
-          <div className="mt-6 space-y-6">
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    Sort:
+                  </span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    className="px-3 py-1.5 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="relevance">Relevance</option>
+                    <option value="date">Upload date</option>
+                    <option value="viewCount">View count</option>
+                    <option value="rating">Rating</option>
+                  </select>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={includeShorts}
+                    onChange={(e) => setIncludeShorts(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    Include Shorts
+                  </span>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useGeminiFilter}
+                    onChange={(e) => setUseGeminiFilter(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    Gemini EDU Filter
+                  </span>
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {loading && <VideoGridSkeleton count={12} />}
+
+        {error && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-6">
+            <p className="text-red-700 dark:text-red-400">{error}</p>
+          </div>
+        )}
+
+        {!loading && videos.length > 0 && (
+          <div
+            className={
+              viewMode === "grid"
+                ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+                : "space-y-4"
+            }
+          >
             {videos.map((v) => (
-              <VideoCardHorizontal
-                key={v.videoId}
+              <VideoCard
+                key={v.videoId || v.id}
                 video={v}
-                onPlay={() => openPlayer(v)}
-                onSummarize={() => goToSummarize(v)}
-                onSave={(video) => saveVideoToDB(video)}
+                onPlay={openPlayer}
+                onSummarize={goToSummarize}
+                onSave={saveVideoToDB}
               />
             ))}
           </div>
-        </div>
-      </main>
+        )}
 
-      {/* ---------- PLAYER MODAL ---------- */}
+        {!loading && videos.length === 0 && query && (
+          <div className="text-center py-12">
+            <p className="text-gray-500 dark:text-gray-400 text-lg">
+              No videos found. Try a different search term.
+            </p>
+          </div>
+        )}
+
+        {!loading && videos.length === 0 && !query && (
+          <div className="text-center py-12">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+              Start Searching for Educational Videos
+            </h2>
+            <p className="text-gray-500 dark:text-gray-400">
+              Search for topics like "Matrices", "Kinematics", or "Organic
+              Chemistry"
+            </p>
+          </div>
+        )}
+      </div>
+
       {playing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl w-11/12 md:w-3/5 lg:w-1/2 p-6 max-h-[90vh] overflow-auto shadow-2xl border border-indigo-100 dark:border-zinc-800">
-            <div className="flex justify-between items-start mb-2">
-              <h2 className="font-bold text-2xl text-indigo-700 dark:text-indigo-300">{playing.title}</h2>
-              <button
-                className="text-sm text-gray-700 dark:text-zinc-300 p-2 border rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800"
-                onClick={closePlayer}
-              >
-                Back
-              </button>
-            </div>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in"
+          onClick={() => setPlaying(null)}
+        >
+          <div
+            className="bg-white dark:bg-gray-900 rounded-2xl w-11/12 md:w-4/5 lg:w-3/4 max-w-5xl max-h-[90vh] overflow-auto shadow-2xl animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex justify-between items-start mb-4">
+                <h2 className="text-xl font-bold text-gray-900 dark:text-white pr-4">
+                  {playing.title}
+                </h2>
+                <button
+                  onClick={() => setPlaying(null)}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors flex-shrink-0"
+                >
+                  <X size={24} className="text-gray-600 dark:text-gray-400" />
+                </button>
+              </div>
 
-            <div className="mt-3 aspect-video rounded-lg overflow-hidden shadow">
-              <iframe
-                width="100%"
-                height="100%"
-                src={`https://www.youtube.com/embed/${playing.videoId}`}
-                title={playing.title}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                className="w-full h-full"
-              />
-            </div>
+              <div className="aspect-video rounded-lg overflow-hidden shadow-lg mb-4 bg-black">
+                <iframe
+                  width="100%"
+                  height="100%"
+                  src={`https://www.youtube.com/embed/${playing.videoId}`}
+                  title={playing.title}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  className="w-full h-full"
+                />
+              </div>
 
-            <div className="mt-4 text-base text-gray-700 dark:text-zinc-300">
-              <p>
-                <strong>Channel:</strong> {playing.channelTitle}
-              </p>
-              <p>
-                <strong>Views:</strong> {playing.viewCount}
-              </p>
-              <p>
-                <strong>Published:</strong> {playing.publishedDate}
-              </p>
-
-              {playing.description && (
-                <div className="mt-3">
-                  <strong>Description:</strong>
-                  <p className="whitespace-pre-line text-sm mt-1 text-gray-600 dark:text-zinc-400">
-                    {playing.description}
-                  </p>
-                </div>
-              )}
+              <div className="text-sm text-gray-700 dark:text-gray-300 space-y-2">
+                <p>
+                  <strong>Channel:</strong> {playing.channelTitle}
+                </p>
+                <p>
+                  <strong>Views:</strong> {playing.viewCount?.toLocaleString()}
+                </p>
+                {playing.description && (
+                  <div className="mt-4">
+                    <strong>Description:</strong>
+                    <p className="whitespace-pre-line text-sm mt-2 text-gray-600 dark:text-gray-400">
+                      {playing.description}
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+export default function YoutubePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-white dark:bg-[#0f0f0f] flex items-center justify-center">
+          <Loader2
+            className="animate-spin text-blue-600 dark:text-blue-400"
+            size={48}
+          />
+        </div>
+      }
+    >
+      <YoutubeContent />
+    </Suspense>
   );
 }

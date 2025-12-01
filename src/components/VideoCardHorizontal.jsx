@@ -8,11 +8,25 @@ function formatNumber(n) {
   return String(n);
 }
 
-export default function VideoCardHorizontal({ video, onPlay, onSummarize, onSave }) {
+export default function VideoCardHorizontal({
+  video,
+  onPlay,
+  onSummarize,
+  onSave,
+}) {
   const [expanded, setExpanded] = useState(false);
-  const { title, thumbnails, channelTitle, description, viewCount, likeCount, publishedAt, publishedDate } = video;
+  const {
+    title,
+    thumbnails,
+    channelTitle,
+    description,
+    viewCount,
+    likeCount,
+    publishedAt,
+    publishedDate,
+  } = video;
 
-  const videoId = video.videoId || video.id?.videoId || video.videoId;
+  const videoId = video.videoId || video.id?.videoId || video.video_id;
 
   return (
     <div className="flex gap-4 bg-white p-3 rounded shadow">
@@ -28,7 +42,7 @@ export default function VideoCardHorizontal({ video, onPlay, onSummarize, onSave
         <div className="flex justify-between">
           <h3 className="font-semibold">{title}</h3>
           <div className="text-right text-xs text-gray-500">
-            <div>{formatNumber(viewCount)} views</div>
+            {viewCount && <div>{formatNumber(viewCount)} views</div>}
             <div>Published: {publishedDate || publishedAt?.split("T")[0]}</div>
           </div>
         </div>
@@ -36,7 +50,11 @@ export default function VideoCardHorizontal({ video, onPlay, onSummarize, onSave
         <p className="text-sm text-gray-600 mt-1">{channelTitle}</p>
 
         <p className="text-sm text-gray-700 mt-2">
-          {expanded ? description : (description ? description.slice(0, 200) : "")}
+          {expanded
+            ? description
+            : description
+            ? description.slice(0, 200)
+            : ""}
           {description && description.length > 200 && !expanded && " ... "}
           {description && description.length > 200 && (
             <button
@@ -49,17 +67,32 @@ export default function VideoCardHorizontal({ video, onPlay, onSummarize, onSave
         </p>
 
         <div className="mt-3 flex gap-2">
-          <button onClick={() => onPlay(video)} className="px-3 py-1 border rounded text-sm">
+          <button
+            onClick={() => onPlay(video)}
+            className="px-3 py-1 border rounded text-sm"
+          >
             Play
           </button>
 
-          <button onClick={onSummarize} className="px-3 py-1 bg-indigo-600 text-white rounded text-sm">
+          <button
+            onClick={onSummarize}
+            className="px-3 py-1 bg-indigo-600 text-white rounded text-sm"
+          >
             Summarize
           </button>
 
           <button
-            onClick={() => onSave(video)}
-            className="px-2 py-1 border rounded text-sm"
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (onSave) {
+                try {
+                  await onSave(video);
+                } catch (error) {
+                  console.error("Error saving video:", error);
+                }
+              }
+            }}
+            className="px-2 py-1 border rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
           >
             Save
           </button>

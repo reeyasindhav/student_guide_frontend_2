@@ -2,29 +2,49 @@
 
 import "./globals.css";
 import { useState } from "react";
-import Header from "@/components/Header";
-import SideBar from "@/components/SideBar";
+import YouTubeHeader from "@/components/YouTubeHeader";
+import YouTubeSidebar from "@/components/YouTubeSidebar";
 
 export default function RootLayout({ children }) {
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   return (
-    <html lang="en">
-      <body className="bg-gray-100">
-        <Header onToggleDrawer={() => setDrawerOpen(!drawerOpen)} />
+    <html lang="en" className="dark">
+      <body className="bg-white dark:bg-[#0f0f0f] text-gray-900 dark:text-white antialiased">
+        <YouTubeHeader
+          onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          onSearchSubmit={() => {
+            if (searchQuery.trim()) {
+              window.location.href = `/youtube?q=${encodeURIComponent(
+                searchQuery
+              )}`;
+            }
+          }}
+        />
 
         <div className="flex">
-          {/* Drawer Sidebar */}
-          <SideBar open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+          {/* Sidebar */}
+          <YouTubeSidebar
+            isOpen={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+          />
 
-          {/* Main Page Content */}
-          <main className="flex-1">{children}</main>
+          {/* Main Content */}
+          <main
+            className={`flex-1 transition-all duration-200 ${
+              sidebarOpen ? "md:ml-64" : ""
+            }`}
+          >
+            {children}
+          </main>
         </div>
       </body>
     </html>
   );
 }
-
 
 // import "./globals.css";
 // import Sidebar from "@/components/SideBar";
@@ -49,11 +69,9 @@ export default function RootLayout({ children }) {
 //   );
 // }
 
-
 // import { Geist, Geist_Mono } from "next/font/google";
 // import "./globals.css";
 // import Sidebar from "@/components/xyz";
-
 
 // const geistSans = Geist({
 //   variable: "--font-geist-sans",
@@ -82,8 +100,6 @@ export default function RootLayout({ children }) {
 //   );
 // }
 
-
-
 // export const metadata = {
 //   title: "AI Edu System",
 //   description: "JEE/NEET video search & summarizer",
@@ -103,5 +119,3 @@ export default function RootLayout({ children }) {
 //     </html>
 //   );
 // }
-
-

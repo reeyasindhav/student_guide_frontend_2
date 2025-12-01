@@ -1,8 +1,10 @@
+import { API_BASE_URL } from "../config/api";
+
 export async function uploadVideo(file) {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch("http://localhost:8000/summarizer/upload", {
+  const res = await fetch(`${API_BASE_URL}/summarizer/upload`, {
     method: "POST",
     body: formData,
   });
@@ -14,14 +16,13 @@ export async function summarizeYoutube(url) {
   const formData = new FormData();
   formData.append("url", url);
 
-  const res = await fetch("http://localhost:8000/summarizer/youtube", {
+  const res = await fetch(`${API_BASE_URL}/summarizer/youtube`, {
     method: "POST",
     body: formData,
   });
 
   return await res.json();
 }
-
 
 /**
  * Helper: call summarizer by videoId (constructs full youtube URL)

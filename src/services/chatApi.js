@@ -1,5 +1,5 @@
 // frontend/src/services/chatApi.js
-const BASE = "http://localhost:8000";
+import { API_BASE_URL } from "../config/api";
 
 /**
  * askStream(question, history, chatId)
@@ -19,7 +19,7 @@ export async function askStream(question, history, chatId) {
   // keep context_files empty by default; frontend can pass JSON string of upload IDs
   form.append("context_files", "[]");
 
-  const res = await fetch(`${BASE}/chatbot/ask-stream`, {
+  const res = await fetch(`${API_BASE_URL}/chatbot/ask-stream`, {
     method: "POST",
     body: form,
   });
@@ -53,15 +53,19 @@ export async function askStream(question, history, chatId) {
 //   return res.json();
 // }
 
-
 export async function uploadPDF(file) {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch("http://localhost:8000/chatbot/upload", {
+  const res = await fetch(`${API_BASE_URL}/chatbot/upload`, {
     method: "POST",
     body: formData,
   });
+
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error("Upload failed: " + txt);
+  }
 
   return res.json();
 }
